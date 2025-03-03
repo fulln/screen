@@ -32,7 +32,7 @@ screen-audio-recorder
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/screen-audio-recorder.git
+   git clone https://github.com/fulln/screen-audio-recorder.git
    ```
 2. Navigate to the project directory:
    ```
