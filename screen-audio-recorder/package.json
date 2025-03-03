@@ -1,0 +1,21 @@
+{
+  "name": "screen-audio-recorder",
+  "version": "1.0.0",
+  "description": "A web application for screen and audio recording with real-time display.",
+  "main": "src/js/app.js",
+  "scripts": {
+    "start": "live-server src",
+    "build": "echo 'Build step not defined'"
+  },
+  "keywords": [
+    "screen",
+    "audio",
+    "recorder",
+    "web"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "live-server": "^1.2.1"
+  }
+}
