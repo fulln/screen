@@ -5,25 +5,50 @@ class ScreenRecorder {
         this.stream = null;
         this.isRecording = false;
         this.recordedBlob = null;
+        this.isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
     }
 
     async startRecording() {
         try {
-            // 请求屏幕和音频录制权限
-            this.stream = await navigator.mediaDevices.getDisplayMedia({
-                video: { mediaSource: 'screen' },
-                audio: true
-            });
+            // 检查浏览器是否支持MediaRecorder API
+            if (!window.MediaRecorder) {
+                throw new Error('您的浏览器不支持屏幕录制功能。请尝试使用最新版本的Chrome、Firefox或Safari 14.1+');
+            }
 
-            // 尝试获取麦克风音频
-            try {
-                const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const audioTracks = audioStream.getAudioTracks();
-                if (audioTracks.length > 0) {
-                    this.stream.addTrack(audioTracks[0]);
+            // 请求屏幕和音频录制权限
+            const displayMediaOptions = {
+                video: { 
+                    mediaSource: 'screen',
+                    // Safari更适合使用较低的帧率以确保稳定性
+                    frameRate: this.isSafari ? 30 : 60
+                },
+                audio: this.isSafari ? false : true // Safari可能在getDisplayMedia中不支持音频
+            };
+            
+            this.stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+
+            // 对于Safari，单独请求音频流
+            if (this.isSafari) {
+                try {
+                    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const audioTracks = audioStream.getAudioTracks();
+                    if (audioTracks.length > 0) {
+                        this.stream.addTrack(audioTracks[0]);
+                    }
+                } catch (audioError) {
+                    console.warn('无法获取麦克风权限:', audioError);
                 }
-            } catch (audioError) {
-                console.warn('无法获取麦克风权限:', audioError);
+            } else {
+                // 非Safari浏览器，尝试获取麦克风音频
+                try {
+                    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const audioTracks = audioStream.getAudioTracks();
+                    if (audioTracks.length > 0) {
+                        this.stream.addTrack(audioTracks[0]);
+                    }
+                } catch (audioError) {
+                    console.warn('无法获取麦克风权限:', audioError);
+                }
             }
 
             // 显示预览
@@ -32,22 +57,34 @@ class ScreenRecorder {
             videoPlayback.muted = true; // 避免反馈
             videoPlayback.play();
 
-            // 设置媒体录制器 - 使用更好的编码选项
-            const options = {
-                mimeType: 'video/webm;codecs=vp9,opus', // 使用VP9视频和Opus音频编解码器
-                videoBitsPerSecond: 2500000 // 2.5 Mbps视频比特率
-            };
+            // 设置媒体录制器 - 根据浏览器选择合适的编码选项
+            let options = {};
             
-            // 检查浏览器支持情况
-            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-                console.warn('VP9不受支持，尝试降级为VP8');
-                options.mimeType = 'video/webm;codecs=vp8,opus';
-                
-                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-                    console.warn('指定的编码器不被支持，使用默认设置');
-                    delete options.mimeType;
+            // Safari优先使用H.264编码器
+            if (this.isSafari) {
+                // Safari 14.1+支持MediaRecorder，但编码器支持有限
+                if (MediaRecorder.isTypeSupported('video/mp4')) {
+                    options.mimeType = 'video/mp4';
+                } else if (MediaRecorder.isTypeSupported('video/webm')) {
+                    options.mimeType = 'video/webm';
+                }
+                // Safari的比特率通常需要较低以确保稳定性
+                options.videoBitsPerSecond = 1500000; // 1.5 Mbps
+            } else {
+                // 非Safari浏览器优先使用VP9
+                if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
+                    options.mimeType = 'video/webm;codecs=vp9,opus';
+                    options.videoBitsPerSecond = 2500000; // 2.5 Mbps
+                } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
+                    options.mimeType = 'video/webm;codecs=vp8,opus';
+                    options.videoBitsPerSecond = 2500000;
+                } else if (MediaRecorder.isTypeSupported('video/webm')) {
+                    options.mimeType = 'video/webm';
+                    options.videoBitsPerSecond = 2500000;
                 }
             }
+            
+            console.log('使用录制选项:', options);
 
             this.mediaRecorder = new MediaRecorder(this.stream, options);
             this.recordedChunks = [];
@@ -61,7 +98,8 @@ class ScreenRecorder {
 
             // 录制完成后的处理
             this.mediaRecorder.onstop = () => {
-                this.recordedBlob = new Blob(this.recordedChunks, { type: options.mimeType || 'video/webm' });
+                const mimeType = options.mimeType || (this.isSafari ? 'video/mp4' : 'video/webm');
+                this.recordedBlob = new Blob(this.recordedChunks, { type: mimeType });
                 const url = URL.createObjectURL(this.recordedBlob);
                 videoPlayback.srcObject = null;
                 videoPlayback.src = url;
@@ -76,8 +114,8 @@ class ScreenRecorder {
                 this.showDownloadOptions();
             };
 
-            // 开始录制
-            this.mediaRecorder.start(100); // 每100ms记录一次数据
+            // 开始录制 - Safari通常需要更长的间隔
+            this.mediaRecorder.start(this.isSafari ? 200 : 100);
             this.isRecording = true;
             
             return true;
@@ -114,19 +152,29 @@ class ScreenRecorder {
         }
         
         // 创建下载按钮
-        const downloadWebM = document.createElement('button');
-        downloadWebM.innerHTML = '<i class="fas fa-download"></i> 下载 WebM 格式';
-        downloadWebM.className = 'download-btn';
-        downloadWebM.onclick = () => this.downloadRecording('webm');
-        
-        const downloadMP4 = document.createElement('button');
-        downloadMP4.innerHTML = '<i class="fas fa-download"></i> 下载 MP4 格式';
-        downloadMP4.className = 'download-btn';
-        downloadMP4.onclick = () => this.downloadRecording('mp4');
-        
-        // 添加按钮到下载区域
-        downloadArea.appendChild(downloadWebM);
-        downloadArea.appendChild(downloadMP4);
+        if (this.isSafari) {
+            // Safari用户只显示一个下载按钮
+            const downloadBtn = document.createElement('button');
+            downloadBtn.innerHTML = '<i class="fas fa-download"></i> 下载录制文件';
+            downloadBtn.className = 'download-btn';
+            downloadBtn.onclick = () => this.downloadRecording(this.isSafari ? 'mp4' : 'webm');
+            downloadArea.appendChild(downloadBtn);
+        } else {
+            // 非Safari用户显示两种格式选项
+            const downloadWebM = document.createElement('button');
+            downloadWebM.innerHTML = '<i class="fas fa-download"></i> 下载 WebM 格式';
+            downloadWebM.className = 'download-btn';
+            downloadWebM.onclick = () => this.downloadRecording('webm');
+            
+            const downloadMP4 = document.createElement('button');
+            downloadMP4.innerHTML = '<i class="fas fa-download"></i> 下载 MP4 格式';
+            downloadMP4.className = 'download-btn';
+            downloadMP4.onclick = () => this.downloadRecording('mp4');
+            
+            // 添加按钮到下载区域
+            downloadArea.appendChild(downloadWebM);
+            downloadArea.appendChild(downloadMP4);
+        }
         
         // 显示文件大小信息
         const sizeInfo = document.createElement('div');
@@ -151,17 +199,18 @@ class ScreenRecorder {
             downloadLink.click();
             document.body.removeChild(downloadLink);
         } else if (format === 'mp4') {
-            // 显示转换中状态
+            // 显示状态
             const statusElement = document.getElementById('status');
             const originalStatus = statusElement.textContent;
-            statusElement.textContent = '正在转换为MP4格式...';
+            
+            // 对于Safari，直接下载；对于其他浏览器，解释可能的兼容性问题
+            if (this.isSafari) {
+                statusElement.textContent = '正在下载...';
+            } else {
+                statusElement.textContent = '正在准备MP4格式...';
+            }
             
             try {
-                // 注意：这里使用的是WebM转MP4的简化方法，实际生产环境可能需要服务器端转换
-                // 或使用更复杂的客户端转换库，如FFmpeg.wasm
-                
-                // 方法1：尝试使用媒体源扩展(MSE)和媒体转换
-                // 为简化实现，我们直接使用.mp4扩展名提示浏览器
                 const downloadLink = document.createElement('a');
                 downloadLink.href = URL.createObjectURL(this.recordedBlob);
                 downloadLink.download = `${fileName}.mp4`;
@@ -169,13 +218,19 @@ class ScreenRecorder {
                 downloadLink.click();
                 document.body.removeChild(downloadLink);
                 
-                statusElement.textContent = '文件已下载 (注意：某些浏览器可能仍以WebM格式保存，只是扩展名为MP4)';
-                setTimeout(() => {
-                    statusElement.textContent = originalStatus;
-                }, 5000);
+                if (!this.isSafari) {
+                    statusElement.textContent = '文件已下载 (注意：某些浏览器可能仍以WebM格式保存，只是扩展名为MP4)';
+                    setTimeout(() => {
+                        statusElement.textContent = originalStatus;
+                    }, 5000);
+                } else {
+                    setTimeout(() => {
+                        statusElement.textContent = originalStatus;
+                    }, 2000);
+                }
             } catch (error) {
-                console.error('MP4转换失败:', error);
-                statusElement.textContent = '转换MP4失败，请尝试WebM格式下载';
+                console.error('下载失败:', error);
+                statusElement.textContent = '下载失败，请重试';
             }
         }
     }
